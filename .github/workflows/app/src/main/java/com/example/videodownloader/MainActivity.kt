@@ -11,6 +11,7 @@ import android.os.Environment
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.widget.Button
 import android.widget.CheckBox
@@ -41,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private var ready = false
     private var busy = false
 
+    private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+
     private val outputDir: File by lazy {
         File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
@@ -61,7 +64,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.pasteBtn).setOnClickListener { pasteFromClipboard() }
         downloadBtn.setOnClickListener { startDownload() }
-        updateBtn.setOnClickListener { updateEngine() }
+        updateBtn.setOnClickListener { updateEngine(auto = false) }
 
         askStoragePermissionIfNeeded()
         handleSharedLink(intent)
@@ -73,7 +76,6 @@ class MainActivity : AppCompatActivity() {
         handleSharedLink(intent)
     }
 
-    // Upar right ⋮ menu
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Instagram login")
         menu.add(0, 2, 0, "Facebook login")
@@ -136,6 +138,12 @@ class MainActivity : AppCompatActivity() {
                 ready = true
                 downloadBtn.isEnabled = true
                 statusText.text = "Taiyar hai. Link daalkar Download dabayein."
+
+                // Din mein ek baar engine apne aap update
+                val last = prefs.getLong("lastUpdate", 0L)
+                if (System.currentTimeMillis() - last > 24L * 3600 * 1000) {
+                    updateEngine(auto = true)
+                }
             } catch (e: Exception) {
                 statusText.text = "Engine start nahi hua: ${e.message}"
             }
@@ -151,19 +159,23 @@ class MainActivity : AppCompatActivity() {
         if (!ready || busy) return
 
         busy = true
-        downloadBtn.isEnabled = false
-        updateBtn.isEnabled = false
+        setButtons(false)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         progressBar.visibility = View.VISIBLE
         progressBar.progress = 0
         statusText.text = "Video ki jaankari li ja rahi hai..."
 
         val cookies = LoginActivity.cookieFile(this)
+        val isYouTube = url.contains("youtube.com") || url.contains("youtu.be")
 
         val request = YoutubeDLRequest(url).apply {
-            addOption("-o", "${outputDir.absolutePath}/%(title).80s [%(id)s].%(ext)s")
+            addOption("-o", "${outputDir.absolutePath}/%(title).70s [%(id)s].%(ext)s")
             addOption("--no-mtime")
-            addOption("--no-playlist")
-            if (cookies.exists()) addOption("--cookies", cookies.absolutePath)
+            addOption("--windows-filenames")
+            addOption("--retries", "5")
+            addOption("--fragment-retries", "10")
+            if (isYouTube) addOption("--no-playlist")
+            if (cookies.exists() && !isYouTube) addOption("--cookies", cookies.absolutePath)
             if (audioOnly.isChecked) {
                 addOption("-x")
                 addOption("--audio-format", "mp3")
@@ -180,7 +192,7 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             val p = progress.toInt().coerceIn(0, 100)
                             progressBar.progress = p
-                            statusText.text = "Download ho raha hai: $p%  (baaki ~${eta}s)"
+                            statusText.text = "Download ho raha hai: $p%  (baaki ~${eta}s)\nApp band na karein."
                         }
                     }
                 }
@@ -189,23 +201,51 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "Ho gaya! File yahan hai: Download/VideoDownloader"
                 urlInput.text.clear()
             } catch (e: Exception) {
-                val msg = e.message ?: ""
-                val needsLogin = msg.contains("cookies", true) || msg.contains("login", true)
-                val tip = if (needsLogin)
-                    "Ye site login maang rahi hai. Upar ⋮ menu se Instagram/Facebook login karke dobara try karein."
-                else
-                    "'Downloader engine update karein' dabakar dobara try karein. Private video download nahi hogi."
-                statusText.text = "Download fail hua.\n${msg.take(300)}\n\nTip: $tip"
+                statusText.text = "Download fail hua.\n${friendlyError(e.message ?: "", url)}"
             } finally {
                 busy = false
-                downloadBtn.isEnabled = true
-                updateBtn.isEnabled = true
+                setButtons(true)
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
     }
 
+    private fun friendlyError(msg: String, url: String): String {
+        val m = msg.lowercase()
+        val site = when {
+            url.contains("instagram") -> "Instagram"
+            url.contains("facebook") || url.contains("fb.watch") -> "Facebook"
+            else -> ""
+        }
+        val tip = when {
+            m.contains("unable to resolve host") || m.contains("network is unreachable") ||
+                    m.contains("timed out") ->
+                "Internet connection check karein aur dobara try karein."
+            site.isNotEmpty() && (m.contains("cookies") || m.contains("login") ||
+                    m.contains("empty media") || m.contains("rate") || m.contains("private")) ->
+                if (LoginActivity.cookieFile(this).exists())
+                    "$site ne mana kar diya. Login purana ho gaya hoga: upar ⋮ se $site login dobara karein. Private account ki video tabhi milegi jab aap us account ko follow karte hon."
+                else
+                    "$site login maang raha hai. Upar ⋮ menu se $site login karke dobara try karein."
+            m.contains("sign in to confirm") || m.contains("bot") ->
+                "YouTube ne rok diya. 'Downloader engine update karein' dabayein, thodi der baad dobara try karein."
+            m.contains("unsupported url") ->
+                "Ye link support nahi hai. Video ka poora link (Share → Copy link) daalein."
+            m.contains("no space") ->
+                "Phone mein jagah khatam hai. Kuch jagah khaali karein."
+            else ->
+                "'Downloader engine update karein' dabakar dobara try karein."
+        }
+        return "$tip\n\n(Detail: ${msg.take(200)})"
+    }
+
+    private fun setButtons(enabled: Boolean) {
+        downloadBtn.isEnabled = enabled
+        updateBtn.isEnabled = enabled
+    }
+
     private fun scanNewFiles() {
-        val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
+        val cutoff = System.currentTimeMillis() - 30 * 60 * 1000
         val files = outputDir.listFiles()
             ?.filter { it.isFile && it.lastModified() > cutoff }
             ?.map { it.absolutePath }
@@ -213,26 +253,29 @@ class MainActivity : AppCompatActivity() {
         if (files.isNotEmpty()) MediaScannerConnection.scanFile(this, files, null, null)
     }
 
-    private fun updateEngine() {
+    private fun updateEngine(auto: Boolean) {
         if (!ready || busy) return
         busy = true
-        updateBtn.isEnabled = false
-        downloadBtn.isEnabled = false
-        statusText.text = "Engine update ho raha hai..."
+        setButtons(false)
+        statusText.text = "Engine update ho raha hai, thoda rukiye..."
         lifecycleScope.launch {
             try {
                 val status = withContext(Dispatchers.IO) {
                     YoutubeDL.getInstance()
                         .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
                 }
-                statusText.text = if (status == YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE)
-                    "Engine pehle se latest hai." else "Engine update ho gaya."
+                prefs.edit().putLong("lastUpdate", System.currentTimeMillis()).apply()
+                statusText.text = when {
+                    auto -> "Taiyar hai. Link daalkar Download dabayein."
+                    status == YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> "Engine pehle se latest hai."
+                    else -> "Engine update ho gaya."
+                }
             } catch (e: Exception) {
-                statusText.text = "Update fail hua: ${e.message}"
+                statusText.text = if (auto) "Taiyar hai. Link daalkar Download dabayein."
+                else "Update fail hua. Internet check karein.\n(${e.message?.take(150)})"
             } finally {
                 busy = false
-                updateBtn.isEnabled = true
-                downloadBtn.isEnabled = true
+                setButtons(true)
             }
         }
     }
