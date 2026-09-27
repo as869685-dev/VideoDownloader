@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -21,8 +22,8 @@ class LoginActivity : AppCompatActivity() {
         fun cookieFile(ctx: Context) = File(ctx.filesDir, "cookies.txt")
 
         private val SITES = mapOf(
-            "instagram" to Pair("https://www.instagram.com/accounts/login/", "https://www.instagram.com"),
-            "facebook" to Pair("https://m.facebook.com/login/", "https://www.facebook.com")
+            "instagram" to Pair("https://www.instagram.com/", "https://www.instagram.com"),
+            "facebook" to Pair("https://m.facebook.com/", "https://www.facebook.com")
         )
     }
 
@@ -35,9 +36,19 @@ class LoginActivity : AppCompatActivity() {
         val (loginUrl, cookieUrl) = SITES[site] ?: SITES.getValue("instagram")
         title = if (site == "facebook") "Facebook login" else "Instagram login"
 
+        // Instagram/Facebook app ke andar wale browser ko block karte hain,
+        // isliye use normal Chrome jaisa bana rahe hain
+        val normalChromeUA = WebSettings.getDefaultUserAgent(this)
+            .replace("; wv", "")
+            .replace(Regex("Version/\\d+(\\.\\d+)*\\s"), "")
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = true
+            settings.userAgentString = normalChromeUA
             webViewClient = WebViewClient()
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
@@ -65,7 +76,12 @@ class LoginActivity : AppCompatActivity() {
         cm.flush()
         val raw = cm.getCookie(cookieUrl)
 
-        if (raw.isNullOrBlank() || (site == "instagram" && !raw.contains("sessionid"))) {
+        val loggedIn = when (site) {
+            "instagram" -> raw?.contains("sessionid") == true
+            "facebook" -> raw?.contains("c_user") == true
+            else -> !raw.isNullOrBlank()
+        }
+        if (raw.isNullOrBlank() || !loggedIn) {
             Toast.makeText(this, "Pehle poora login karein, phir Save dabayein.", Toast.LENGTH_LONG).show()
             return
         }
