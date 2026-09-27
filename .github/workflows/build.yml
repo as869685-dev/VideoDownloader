@@ -22,6 +22,11 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Fixed signing key
+        run: |
+          mkdir -p ~/.android
+          base64 -d -i .github/workflows/debug-keystore.txt > ~/.android/debug.keystore
+
       - name: APK banao
         working-directory: .github/workflows
         run: gradle assembleDebug
