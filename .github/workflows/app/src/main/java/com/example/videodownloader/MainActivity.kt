@@ -8,7 +8,10 @@ import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
+import android.webkit.CookieManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -70,6 +73,34 @@ class MainActivity : AppCompatActivity() {
         handleSharedLink(intent)
     }
 
+    // Upar right ⋮ menu
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Instagram login")
+        menu.add(0, 2, 0, "Facebook login")
+        menu.add(0, 3, 0, "Login hatayein")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            1 -> openLogin("instagram")
+            2 -> openLogin("facebook")
+            3 -> {
+                LoginActivity.cookieFile(this).delete()
+                CookieManager.getInstance().removeAllCookies(null)
+                statusText.text = "Login hata diya gaya."
+            }
+            else -> return super.onOptionsItemSelected(item)
+        }
+        return true
+    }
+
+    private fun openLogin(site: String) {
+        startActivity(
+            Intent(this, LoginActivity::class.java).putExtra(LoginActivity.EXTRA_SITE, site)
+        )
+    }
+
     private fun handleSharedLink(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
@@ -126,10 +157,13 @@ class MainActivity : AppCompatActivity() {
         progressBar.progress = 0
         statusText.text = "Video ki jaankari li ja rahi hai..."
 
+        val cookies = LoginActivity.cookieFile(this)
+
         val request = YoutubeDLRequest(url).apply {
             addOption("-o", "${outputDir.absolutePath}/%(title).80s [%(id)s].%(ext)s")
             addOption("--no-mtime")
             addOption("--no-playlist")
+            if (cookies.exists()) addOption("--cookies", cookies.absolutePath)
             if (audioOnly.isChecked) {
                 addOption("-x")
                 addOption("--audio-format", "mp3")
@@ -155,9 +189,13 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "Ho gaya! File yahan hai: Download/VideoDownloader"
                 urlInput.text.clear()
             } catch (e: Exception) {
-                statusText.text = "Download fail hua.\n${e.message?.take(400)}\n\n" +
-                        "Tip: 'Downloader engine update karein' dabakar dobara try karein. " +
-                        "Private video / private account ki video download nahi hogi."
+                val msg = e.message ?: ""
+                val needsLogin = msg.contains("cookies", true) || msg.contains("login", true)
+                val tip = if (needsLogin)
+                    "Ye site login maang rahi hai. Upar ⋮ menu se Instagram/Facebook login karke dobara try karein."
+                else
+                    "'Downloader engine update karein' dabakar dobara try karein. Private video download nahi hogi."
+                statusText.text = "Download fail hua.\n${msg.take(300)}\n\nTip: $tip"
             } finally {
                 busy = false
                 downloadBtn.isEnabled = true
